@@ -58,3 +58,6 @@ test_*.py
 
 # Huggingface cache
 .cache/
+
+# Large unused model
+models/finetuned_model.h5
