@@ -3,7 +3,8 @@ import shutil
 import tempfile
 import uvicorn
 import warnings
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from mtcnn.mtcnn import MTCNN
 import tensorflow as tf
 
@@ -19,11 +20,23 @@ try:
     from .predict import get_image_prediction
     from .predict_video_model import get_video_prediction
     from .video_model import build_video_model
+    from .database import connect_to_mongo, close_mongo_connection, get_database
+    from .auth import (
+        UserSignup, UserLogin, UserResponse, UsageResponse,
+        hash_password, verify_password, generate_api_key, create_user_document,
+        validate_api_key, hash_api_key
+    )
 except ImportError:
     # This fallback lets us run the file directly if needed
     import config
     from predict import get_image_prediction
     from predict_video_model import get_video_prediction
+    from database import connect_to_mongo, close_mongo_connection, get_database
+    from auth import (
+        UserSignup, UserLogin, UserResponse, UsageResponse,
+        hash_password, verify_password, generate_api_key, create_user_document,
+        validate_api_key, hash_api_key
+    )
 
 # --- 1. Create the FastAPI app ---
 app = FastAPI(
@@ -32,12 +45,38 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# --- CORS Configuration ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 # --- 2. Load Models at Startup (Best Practice) ---
 # This dictionary will hold our models, loaded ONCE.
 # This is far more efficient than loading them for every request.
 models = {}
 
 @app.on_event("startup")
+async def startup_event():
+    """
+    Startup: Connect to MongoDB and load ML models.
+    """
+    # Connect to MongoDB first
+    await connect_to_mongo()
+    
+    # Then load ML models
+    await load_models()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Shutdown: Close MongoDB connection."""
+    await close_mongo_connection()
+
+
 async def load_models():
     """
     Load all ML models into memory when the API server starts.
@@ -81,7 +120,7 @@ async def load_models():
     # --- Load Audio Model (Local HuggingFace) ---
     try:
         from transformers import pipeline
-        print("Loading Audio Model (motheecreator/Deepfake-audio-detection)...")
+        print("Loading Audio Model (deepfake_audio.h5)...")
         models["audio_pipeline"] = pipeline("audio-classification", model="motheecreator/Deepfake-audio-detection")
         print("Audio Model loaded successfully.")
     except Exception as e:
@@ -96,11 +135,127 @@ def read_root():
     """A simple 'health check' endpoint to see if the server is running."""
     return {"status": "Deepfake Detector API is online and running."}
 
+
+# --- 4. Authentication Endpoints ---
+
+@app.post("/signup", response_model=UserResponse)
+async def signup(user: UserSignup):
+    """
+    Create a new user account and get your API key.
+    ⚠️ IMPORTANT: Save your API key! It will only be shown ONCE.
+    """
+    db = get_database()
+    
+    # Check if email already exists
+    existing = await db.users.find_one({"email": user.email})
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered. Please login to get your API key."
+        )
+    
+    # Create new user (returns user_doc and raw_api_key)
+    user_doc, raw_api_key = create_user_document(user.email, user.password)
+    await db.users.insert_one(user_doc)
+    
+    return UserResponse(
+        email=user.email,
+        api_key=raw_api_key,
+        message="Account created! ⚠️ SAVE YOUR API KEY NOW - it will NOT be shown again!"
+    )
+
+
+@app.post("/login", response_model=UserResponse)
+async def login(user: UserLogin):
+    """
+    Login to view your API key prefix.
+    Note: For security, full key is only shown at signup.
+    Use /regenerate-key to get a new key if lost.
+    """
+    db = get_database()
+    
+    # Find user
+    existing = await db.users.find_one({"email": user.email})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found. Please signup first.")
+    
+    # Verify password
+    if not verify_password(user.password, existing["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid password.")
+    
+    # Update last login
+    from datetime import datetime
+    await db.users.update_one(
+        {"email": user.email},
+        {"$set": {"last_login": datetime.utcnow()}}
+    )
+    
+    return UserResponse(
+        email=user.email,
+        api_key=existing.get("api_key_prefix", "Key hidden for security"),
+        message="Login successful. Use /regenerate-key if you need a new API key."
+    )
+
+
+@app.post("/regenerate-key", response_model=UserResponse)
+async def regenerate_key(user: UserLogin):
+    """
+    Generate a new API key. The old key will stop working.
+    ⚠️ IMPORTANT: Save your new API key! It will only be shown ONCE.
+    """
+    db = get_database()
+    
+    # Find user
+    existing = await db.users.find_one({"email": user.email})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found.")
+    
+    # Verify password
+    if not verify_password(user.password, existing["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid password.")
+    
+    # Generate new key (returns tuple)
+    raw_key, key_hash, key_prefix = generate_api_key()
+    await db.users.update_one(
+        {"email": user.email},
+        {"$set": {"api_key_hash": key_hash, "api_key_prefix": key_prefix}}
+    )
+    
+    return UserResponse(
+        email=user.email,
+        api_key=raw_key,
+        message="New API key generated! ⚠️ SAVE IT NOW - old key is now invalid!"
+    )
+
+
+@app.get("/usage", response_model=UsageResponse)
+async def get_usage(user: dict = Depends(validate_api_key)):
+    """
+    Check your API usage and remaining quota.
+    Requires x-api-key header.
+    """
+    rate_limit = user.get("rate_limit", 100)
+    requests_today = user.get("requests_today", 0)
+    
+    return UsageResponse(
+        email=user["email"],
+        requests_today=requests_today,
+        rate_limit=rate_limit,
+        remaining=max(0, rate_limit - requests_today),
+        total_requests=user.get("total_requests", 0)
+    )
+
+
+# --- 5. Prediction Endpoints (Protected) ---
+
 @app.post("/predict_image")
-async def predict_image_api(file: UploadFile = File(...)):
+async def predict_image_api(
+    file: UploadFile = File(...),
+    user: dict = Depends(validate_api_key)
+):
     """
     Endpoint for predicting a single deepfake image.
-    Accepts an uploaded image file.
+    Requires API key in x-api-key header.
     """
     if "image_model" not in models:
         raise HTTPException(status_code=500, detail="Image model is not loaded.")
@@ -131,10 +286,13 @@ async def predict_image_api(file: UploadFile = File(...)):
             os.remove(temp_file_path)
 
 @app.post("/predict_video")
-async def predict_video_api(file: UploadFile = File(...)):
+async def predict_video_api(
+    file: UploadFile = File(...),
+    user: dict = Depends(validate_api_key)
+):
     """
     Endpoint for predicting a single deepfake video.
-    Accepts an uploaded video file.
+    Requires API key in x-api-key header.
     """
     if "video_model" not in models or "mtcnn_detector" not in models:
         raise HTTPException(status_code=500, detail="Video models are not loaded.")
@@ -163,11 +321,13 @@ async def predict_video_api(file: UploadFile = File(...)):
             os.remove(temp_file_path)
 
 @app.post("/predict_audio")
-async def predict_audio_api(file: UploadFile = File(...)):
+async def predict_audio_api(
+    file: UploadFile = File(...),
+    user: dict = Depends(validate_api_key)
+):
     """
     Endpoint for predicting a single deepfake audio.
-    Accepts an uploaded audio file.
-    Uses local HuggingFace model for detection.
+    Requires API key in x-api-key header.
     """
     if "audio_pipeline" not in models:
         # Try to reload if missing
