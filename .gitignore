@@ -1,0 +1,60 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Data folders
+# These are often large and should not be tracked by Git
+data/processed/
+data/raw/
+processed_sequences/
+
+# Logs
+*.log
+*.history
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# Virtual environment
+venv/
+env/
+.venv/
+.deepfake_detector/
+
+# IDE-specific
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Lock files
+*.lock
+
+# Test files
+test_*.py
+!tests/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Model files (large files - use Git LFS or upload separately)
+# Uncomment these if you don't want to track models in git:
+# models/*.h5
+# models/*.keras
+# models/*.pt
+# models/*.pth
+
+# Streamlit cache
+.streamlit/
+
+# Huggingface cache
+.cache/
