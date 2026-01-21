@@ -7,12 +7,16 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from mtcnn.mtcnn import MTCNN
 import tensorflow as tf
+from huggingface_hub import hf_hub_download
 
 # --- Suppress TensorFlow & MTCNN Warnings ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 tf.get_logger().setLevel('ERROR')
 warnings.filterwarnings('ignore')
-# Trigger reload for audio client
+
+# HuggingFace Hub Configuration
+HF_REPO_ID = "piyushnaula/deepfake-detector"
+HF_TOKEN = os.getenv("HF_TOKEN")  # Set this in Render environment variables
 
 # --- Imports for config and prediction functions ---
 try:
@@ -79,48 +83,64 @@ async def shutdown_event():
 
 async def load_models():
     """
-    Load all ML models into memory when the API server starts.
+    Load all ML models from HuggingFace Hub when the API server starts.
     """
-    print("--- Loading models into memory... ---")
+    print("--- Loading models from HuggingFace Hub... ---")
     
-    # Load Image Model (baseline_model.h5)
-    image_model_path = os.path.join(config.MODEL_DIR, "baseline_model.h5")
-    if os.path.exists(image_model_path):
+    # --- Load Image Model from HuggingFace ---
+    try:
+        print("Downloading Image Model (baseline_model.h5) from HuggingFace...")
+        image_model_path = hf_hub_download(
+            repo_id=HF_REPO_ID,
+            filename="baseline_model.h5",
+            token=HF_TOKEN
+        )
         models["image_model"] = tf.keras.models.load_model(image_model_path, compile=False)
-        print("Image model (baseline_model.h5) loaded successfully.")
-    else:
-        print(f"WARNING: Image model not found at {image_model_path}")
+        print("Image model loaded successfully.")
+    except Exception as e:
+        print(f"WARNING: Failed to load Image Model: {e}")
 
-
-    video_model_path = os.path.join(config.MODEL_DIR, "video_model_v2.keras")
-    if os.path.exists(video_model_path):
+    # --- Load Video Model from HuggingFace ---
+    try:
+        print("Downloading Video Model (video_model_v2.keras) from HuggingFace...")
+        
+        # Download finetuned encoder first (needed for video_model.py)
+        finetuned_path = hf_hub_download(
+            repo_id=HF_REPO_ID,
+            filename="finetuned_model.h5",
+            token=HF_TOKEN
+        )
+        
+        # Import build_video_model here to avoid circular imports
         try:
-            # 1. Build the "empty" model architecture from your code
-            print("Building video model architecture from video_model.py...")
-            video_model = build_video_model()
-            
-            # 2. Load *only the weights* from your saved file
-            print(f"Loading weights from {video_model_path}...")
-            video_model.load_weights(video_model_path)
-            
-            # 3. Assign the working model
-            models["video_model"] = video_model
-            print("Video model (video_model_v2.keras) loaded successfully from weights.")
-            
-        except Exception as e:
-            print(f"CRITICAL ERROR: Failed to load video model from weights: {e}")
-            print("This might be due to a mismatch between video_model.py and your saved file.")
-    else:
-        print(f"WARNING: Video model not found at {video_model_path}")
-    # --- END: ULTIMATE FIX FOR VIDEO MODEL ---
-    # Load MTCNN Detector
+            from .video_model import build_video_model
+        except ImportError:
+            from video_model import build_video_model
+        
+        # Build the model architecture
+        print("Building video model architecture...")
+        video_model = build_video_model()
+        
+        # Download and load weights
+        video_weights_path = hf_hub_download(
+            repo_id=HF_REPO_ID,
+            filename="video_model_v2.keras",
+            token=HF_TOKEN
+        )
+        video_model.load_weights(video_weights_path)
+        models["video_model"] = video_model
+        print("Video model loaded successfully.")
+    except Exception as e:
+        print(f"WARNING: Failed to load Video Model: {e}")
+
+    # --- Load MTCNN Detector ---
     models["mtcnn_detector"] = MTCNN()
     print("MTCNN detector initialized.")
 
-    # --- Load Audio Model (Local HuggingFace) ---
+    # --- Load Audio Model (HuggingFace Transformers) ---
     try:
         from transformers import pipeline
-        print("Loading Audio Model (deepfake_audio.h5)...")
+        print("Loading Audio Model (Deepfake-audio-detection)...")
         models["audio_pipeline"] = pipeline("audio-classification", model="motheecreator/Deepfake-audio-detection")
         print("Audio Model loaded successfully.")
     except Exception as e:

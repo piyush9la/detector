@@ -46,12 +46,15 @@ test_*.py
 *.tmp
 *.temp
 
-# Model files (large files - use Git LFS or upload separately)
-# Uncomment these if you don't want to track models in git:
-# models/*.h5
-# models/*.keras
-# models/*.pt
-# models/*.pth
+# Model files (loaded from HuggingFace Hub now)
+models/
+
+# Results folder (training outputs)
+results/
+
+# Utility scripts (not needed for deployment)
+push.py
+project_flow.txt
 
 # Streamlit cache
 .streamlit/
@@ -61,6 +64,3 @@ test_*.py
 
 # Environment variables (secrets)
 .env
-
-# Large unused model
-models/finetuned_model.h5
