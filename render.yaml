@@ -1,9 +1,12 @@
 services:
   - type: web
     name: deepfake-detector-api
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn src.main:app --host 0.0.0.0 --port $PORT
+    runtime: docker
+    dockerfilePath: ./Dockerfile
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.11.0"
+      - key: MONGODB_URI
+        sync: false
+      - key: DATABASE_NAME
+        value: "deepfake_detector"
+      - key: API_SECRET_KEY
+        generateValue: true
