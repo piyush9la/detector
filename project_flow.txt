@@ -1,0 +1,227 @@
+================================================================================
+                    DEEPFAKE DETECTOR - BACKEND PROJECT FLOW
+================================================================================
+
+Last Updated: 2026-01-22
+Author: AI Assistant (Antigravity)
+
+================================================================================
+                              PROJECT OVERVIEW
+================================================================================
+
+This is a Deepfake Detection API built with FastAPI that detects deepfakes in:
+- Images (using TensorFlow/Keras model)
+- Videos (using CNN-LSTM model with MTCNN face detection)
+- Audio (using HuggingFace transformers)
+
+================================================================================
+                              TECH STACK
+================================================================================
+
+Backend Framework:  FastAPI (Python)
+Database:           MongoDB Atlas (Cloud)
+ML Frameworks:      TensorFlow, Keras, PyTorch, Transformers
+Face Detection:     MTCNN
+Authentication:     Bcrypt (password hashing), SHA-256 (API key hashing)
+Deployment:         Docker + Render
+
+================================================================================
+                           FOLDER STRUCTURE
+================================================================================
+
+deepfake-detector/
+├── src/
+│   ├── main.py           # FastAPI app, all endpoints
+│   ├── auth.py           # Authentication & API key management
+│   ├── database.py       # MongoDB connection
+│   ├── config.py         # Project configuration
+│   ├── predict.py        # Image prediction logic
+│   ├── predict_video_model.py  # Video prediction logic
+│   └── video_model.py    # Video model architecture
+├── models/
+│   ├── baseline_model.h5      # Image deepfake model
+│   ├── video_model_v2.keras   # Video deepfake model
+│   └── finetuned_model.h5     # Encoder for video model
+├── .env                  # Environment variables (secrets)
+├── .env.example          # Template for .env
+├── requirements.txt      # Python dependencies
+├── Dockerfile            # Docker configuration
+├── render.yaml           # Render deployment config
+├── start.sh              # Startup script for Docker
+└── app.py                # Streamlit frontend
+
+================================================================================
+                           API ENDPOINTS
+================================================================================
+
+PUBLIC ENDPOINTS (No auth required):
+------------------------------------
+GET  /           → Health check
+POST /signup     → Create account, get API key (shown ONCE)
+POST /login      → View API key prefix
+POST /regenerate-key → Generate new API key (shown ONCE)
+
+PROTECTED ENDPOINTS (Require x-api-key header):
+-----------------------------------------------
+GET  /usage          → Check API usage & remaining quota
+POST /predict_image  → Detect deepfake in image
+POST /predict_video  → Detect deepfake in video
+POST /predict_audio  → Detect deepfake in audio
+
+================================================================================
+                     AUTHENTICATION SYSTEM (OpenAI-style)
+================================================================================
+
+Implemented by: AI Assistant
+
+1. SIGNUP FLOW:
+   - User provides email + password
+   - Password hashed with bcrypt
+   - API key generated: sk-live-{random_hex_48chars}
+   - API key hashed with SHA-256 before storing
+   - Raw API key shown ONCE to user
+
+2. LOGIN FLOW:
+   - Verify email + password
+   - Only show API key PREFIX (e.g., sk-live-8cc37354...)
+   - Full key is NOT recoverable (security feature)
+
+3. REGENERATE KEY FLOW:
+   - Verify email + password
+   - Generate new API key
+   - Old key becomes invalid immediately
+   - New key shown ONCE
+
+4. API KEY VALIDATION:
+   - User sends: x-api-key: sk-live-xxxxx
+   - Server hashes incoming key
+   - Compares hash with stored hash
+   - If match → request allowed + rate limit checked
+
+================================================================================
+                         RATE LIMITING SYSTEM
+================================================================================
+
+Implemented by: AI Assistant
+
+- Default limit: 100 requests/day per user
+- Counter resets at midnight UTC
+- When exceeded: HTTP 429 Too Many Requests
+- Usage tracked in MongoDB:
+  {
+    "requests_today": 5,
+    "last_request_date": "2026-01-22",
+    "total_requests": 150,
+    "rate_limit": 100
+  }
+
+================================================================================
+                           USER SCHEMA (MongoDB)
+================================================================================
+
+{
+  "_id": ObjectId,
+  "email": "user@example.com",
+  "password_hash": "bcrypt_hash_here",
+  "api_key_hash": "sha256_hash_here",
+  "api_key_prefix": "sk-live-8cc37354...",
+  "requests_today": 5,
+  "last_request_date": "2026-01-22",
+  "total_requests": 150,
+  "rate_limit": 100,
+  "created_at": ISODate,
+  "last_login": ISODate
+}
+
+================================================================================
+                           ML MODELS USED
+================================================================================
+
+1. IMAGE MODEL (baseline_model.h5)
+   - TensorFlow/Keras CNN
+   - Input: JPG/PNG images
+   - Output: REAL/FAKE + confidence %
+
+2. VIDEO MODEL (video_model_v2.keras)
+   - CNN-LSTM architecture
+   - Uses finetuned_model.h5 as feature encoder
+   - Face extraction via MTCNN
+   - Input: MP4/MOV/AVI videos
+   - Output: REAL/FAKE + confidence %
+
+3. AUDIO MODEL (HuggingFace)
+   - Model: motheecreator/Deepfake-audio-detection
+   - Loaded via transformers pipeline
+   - Input: WAV/MP3/FLAC/OGG/M4A
+   - Output: REAL/FAKE + confidence %
+
+================================================================================
+                       WHAT WAS IMPLEMENTED BY AI ASSISTANT
+================================================================================
+
+1. API KEY MANAGEMENT SYSTEM
+   - src/auth.py (complete rewrite)
+   - OpenAI-style sk-live-xxx format
+   - SHA-256 hashing for security
+   - Key shown only once at signup
+
+2. MONGODB INTEGRATION
+   - src/database.py (new file)
+   - Async connection with motor
+   - Index creation for email & api_key
+
+3. RATE LIMITING
+   - 100 requests/day default
+   - Auto-reset at midnight
+   - Usage tracking per user
+
+4. USAGE ENDPOINT
+   - GET /usage to check quota
+   - Returns remaining requests
+
+5. ENVIRONMENT CONFIGURATION
+   - .env file for secrets
+   - .env.example as template
+   - python-dotenv integration
+
+6. CORS MIDDLEWARE
+   - Added to allow API access from browsers
+
+7. PROTECTED ENDPOINTS
+   - All /predict_* endpoints require API key
+   - Dependency injection: Depends(validate_api_key)
+
+8. RENDER DEPLOYMENT CONFIG
+   - Updated render.yaml for Docker
+   - Environment variable placeholders
+
+================================================================================
+                           HOW TO RUN LOCALLY
+================================================================================
+
+1. Install dependencies:
+   pip install -r requirements.txt
+
+2. Set environment variables (create .env):
+   MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/
+   DATABASE_NAME=deepfake_detector
+
+3. Start server:
+   uvicorn src.main:app --host 127.0.0.1 --port 8000
+
+4. Open docs:
+   http://127.0.0.1:8000/docs
+
+================================================================================
+                           HOW TO DEPLOY (RENDER)
+================================================================================
+
+1. Push to GitHub
+2. Create Web Service on Render
+3. Add environment variable:
+   - MONGODB_URI = your_mongodb_connection_string
+4. Deploy
+
+================================================================================
+                              END OF DOCUMENT
+================================================================================
