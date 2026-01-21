@@ -10,3 +10,4 @@ services:
         value: "deepfake_detector"
       - key: API_SECRET_KEY
         generateValue: true
+    healthCheckPath: /
